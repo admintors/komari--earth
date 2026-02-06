@@ -1,0 +1,1183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D地球 - 增强版</title>
+</head>
+<body>
+<script src="//unpkg.com/globe.gl@2.27.2/dist/globe.gl.min.js"></script>
+<script src="https://unpkg.com/topojson-client@3"></script>
+
+<style>
+    /* =========================================
+       模块样式 (胶囊条 & 返回顶部)
+       ========================================= */
+    #capsule-bar {
+        position: fixed;
+        bottom: 30px;
+        left: 50%;
+        /* 初始状态：向下偏移 30px */
+        transform: translateX(-50%) translateY(30px);
+        z-index: 99990; /* 略低于地球侧边栏(99999) */
+        
+        display: flex;
+        align-items: center;
+        padding: 8px clamp(10px, 2vw, 20px); 
+        gap: 8px;
+        
+        background: rgba(255, 255, 255, 0.95); 
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        
+        border-radius: 50px;
+        border: 1px solid rgba(255, 255, 255, 0.6);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+        
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        font-weight: 500;
+        color: #1d1d1f;
+        font-size: clamp(11px, 2.5vw, 14px); 
+        white-space: nowrap;
+        max-width: 92vw; 
+        overflow-x: hidden;
+        
+        /* 极慢速过渡动画 */
+        opacity: 0;          
+        visibility: hidden;  
+        transition: opacity 1.5s ease, transform 1.5s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 1.5s;
+        pointer-events: none; 
+    }
+
+    #capsule-bar.active {
+        opacity: 1;
+        visibility: visible;
+        transform: translateX(-50%) translateY(0); 
+        pointer-events: auto; 
+    }
+
+    .capsule-icon {
+        width: 1.4em; 
+        height: 1.4em;
+        flex-shrink: 0;
+        color: #007AFF;
+        margin-right: 2px;
+    }
+
+    .ip-prefix {
+        font-weight: 600;
+        color: #007AFF;
+    }
+
+    .capsule-divider {
+        display: inline-block;
+        width: 1px;
+        height: 12px;
+        background-color: rgba(0, 0, 0, 0.15);
+        margin: 0 6px;
+        vertical-align: middle;
+    }
+
+    .isp-info {
+        max-width: 40vw;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: inline-block;
+        vertical-align: bottom;
+    }
+
+    /* 返回顶部按钮 */
+    #back-top-btn {
+        position: fixed;
+        bottom: 45px;
+        right: 120px;
+        z-index: 99990; /* 与胶囊条同级 */
+        
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        
+        background: rgba(255, 255, 255, 0.85);
+        backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.5);
+        box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
+        
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        cursor: pointer;
+        color: #333;
+        
+        opacity: 0;
+        visibility: hidden; 
+        transform: translateY(10px) scale(0.9);
+        transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    }
+    
+    #back-top-btn.visible {
+        opacity: 1;
+        visibility: visible;
+        transform: translateY(0) scale(1);
+    }
+    
+    #back-top-btn:hover {
+        transform: translateY(-2px);
+        background: rgba(255, 255, 255, 0.95);
+    }
+
+    /* 深色模式适配 */
+    @media (prefers-color-scheme: dark) {
+        #capsule-bar, #back-top-btn {
+            background: rgba(30, 30, 30, 0.95);
+            border-color: rgba(255, 255, 255, 0.1);
+            color: #f5f5f7;
+        }
+        .capsule-divider { background-color: rgba(255, 255, 255, 0.2); }
+        .capsule-icon, .ip-prefix { color: #0A84FF; }
+        #back-top-btn { color: #fff; }
+    }
+
+    @media (max-width: 600px) {
+        #back-top-btn { bottom: 80px; right: 20px; }
+        .ip-prefix { display: none; }
+    }
+    @media (min-width: 360px) {
+        .ip-prefix { display: inline; }
+    }
+
+    /* =========================================
+       地球模块样式
+       ========================================= */
+    #earth-drawer-container {
+        position: fixed;
+        top: 0;
+        right: 0;
+        width: 66.7vw;
+        min-width: 500px;
+        height: 100vh;
+        z-index: 99999; /* 最高层级，确保覆盖胶囊条 */
+        background: linear-gradient(135deg, rgba(0, 5, 15, 0.98), rgba(0, 10, 25, 0.98));
+        border-left: 2px solid rgba(0, 255, 255, 0.4);
+        box-shadow: none;
+        transform: translateX(100%);
+        transition: transform 0.5s cubic-bezier(0.23, 1, 0.32, 1);
+        display: flex;
+        flex-direction: column;
+    }
+    #earth-drawer-container.active { transform: translateX(0); }
+    #earth-render-area { flex: 1; width: 100%; height: 100%; overflow: hidden; cursor: grab; }
+    #earth-render-area:active { cursor: grabbing; }
+
+    .earth-header {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        padding: 20px 30px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        z-index: 10;
+        background: linear-gradient(180deg, rgba(0,0,0,0.95) 0%, transparent 100%);
+        pointer-events: none;
+        backdrop-filter: blur(10px);
+    }
+    .earth-title {
+        color: #00ffff;
+        font-family: 'Segoe UI', monospace;
+        letter-spacing: 4px;
+        font-weight: 700;
+        font-size: 20px;
+        text-shadow: 0 0 15px rgba(0, 255, 255, 0.8);
+        pointer-events: auto;
+    }
+    .earth-stats {
+        position: absolute;
+        top: 80px;
+        left: 30px;
+        color: rgba(255, 255, 255, 0.95);
+        font-family: 'Consolas', monospace;
+        font-size: 13px;
+        z-index: 10;
+        background: rgba(0, 20, 40, 0.85);
+        padding: 15px 20px;
+        border: 1px solid rgba(0, 255, 255, 0.5);
+        border-radius: 6px;
+        backdrop-filter: blur(10px);
+    }
+    .earth-stats div { margin: 4px 0; }
+    .earth-stats span { color: #00ffff; font-weight: bold; }
+
+    #earth-close-btn {
+        pointer-events: auto;
+        color: #fff;
+        background: linear-gradient(135deg, rgba(0, 100, 150, 0.3), rgba(0, 50, 100, 0.3));
+        border: 1px solid rgba(0, 255, 255, 0.6);
+        padding: 10px 24px;
+        font-size: 14px;
+        cursor: pointer;
+        transition: all 0.3s;
+        font-family: 'Consolas', monospace;
+        border-radius: 6px;
+    }
+    #earth-close-btn:hover {
+        background: linear-gradient(135deg, rgba(0, 255, 255, 0.4), rgba(0, 200, 255, 0.4));
+        box-shadow: 0 0 20px rgba(0, 255, 255, 0.6);
+    }
+
+    #earth-toggle-btn {
+        position: fixed;
+        bottom: 30px;
+        right: 30px;
+        width: 70px;
+        height: 70px;
+        background: linear-gradient(145deg, rgba(255,255,255,0.15), rgba(255,255,255,0.05), rgba(0,0,0,0.1));
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 20px;
+        cursor: pointer;
+        z-index: 99998;
+        box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37), 0 4px 16px rgba(0, 0, 0, 0.3), inset 0 2px 4px rgba(255, 255, 255, 0.1);
+        transition: all 0.4s cubic-bezier(0.23, 1, 0.32, 1);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: visible;
+    }
+    #earth-toggle-btn::before {
+        content: '';
+        position: absolute;
+        top: -2px; left: -2px; right: -2px; bottom: -2px;
+        background: linear-gradient(45deg, #00ffff, #0080ff, #8000ff, #ff00ff, #ff0080, #00ffff);
+        background-size: 400% 400%;
+        border-radius: 22px;
+        z-index: -1;
+        opacity: 0;
+        animation: gradientBorder 3s ease infinite;
+        transition: opacity 0.4s;
+    }
+    #earth-toggle-btn:hover::before { opacity: 1; }
+    @keyframes gradientBorder {
+        0% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+    }
+    #earth-toggle-btn:hover {
+        transform: translateY(-5px) scale(1.05);
+        box-shadow: 0 15px 40px rgba(0, 255, 255, 0.4), 0 8px 20px rgba(31, 38, 135, 0.5);
+        border-color: rgba(0, 255, 255, 0.5);
+    }
+    #earth-toggle-btn.hidden { transform: translateX(150px) scale(0); opacity: 0; pointer-events: none; }
+
+    .earth-icon {
+        width: 40px;
+        height: 40px;
+        filter: drop-shadow(0 2px 8px rgba(0, 255, 255, 0.5));
+        animation: floatIcon 3s ease-in-out infinite;
+    }
+    @keyframes floatIcon {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-3px); }
+    }
+
+    .particle-container { position: absolute; width: 100%; height: 100%; pointer-events: none; }
+    .particle {
+        position: absolute;
+        width: 4px;
+        height: 4px;
+        background: #00ffff;
+        border-radius: 50%;
+        opacity: 0;
+        box-shadow: 0 0 6px #00ffff;
+    }
+    #earth-toggle-btn:hover .particle { animation: particleFloat 1.5s ease-out infinite; }
+    .particle:nth-child(1) { left: 10%; top: 50%; animation-delay: 0s; }
+    .particle:nth-child(2) { left: 90%; top: 50%; animation-delay: 0.2s; }
+    .particle:nth-child(3) { left: 50%; top: 10%; animation-delay: 0.4s; }
+    .particle:nth-child(4) { left: 50%; top: 90%; animation-delay: 0.6s; }
+    .particle:nth-child(5) { left: 20%; top: 20%; animation-delay: 0.1s; }
+    .particle:nth-child(6) { left: 80%; top: 80%; animation-delay: 0.3s; }
+    @keyframes particleFloat {
+        0% { opacity: 1; transform: translate(0, 0) scale(1); }
+        100% { opacity: 0; transform: translate(calc((var(--x, 0.5) - 0.5) * 60px), calc((var(--y, 0.5) - 0.5) * 60px)) scale(0); }
+    }
+
+    .ripple-ring {
+        position: absolute;
+        border: 2px solid rgba(0, 255, 255, 0.6);
+        border-radius: 20px;
+        width: 100%; height: 100%;
+        opacity: 0;
+        pointer-events: none;
+    }
+    .ripple-ring.animate { animation: rippleExpand 0.6s ease-out forwards; }
+    @keyframes rippleExpand {
+        0% { transform: scale(1); opacity: 1; }
+        100% { transform: scale(1.8); opacity: 0; }
+    }
+    .pulse-ring {
+        position: absolute;
+        border: 2px solid rgba(0, 255, 255, 0.3);
+        border-radius: 20px;
+        width: 100%; height: 100%;
+        animation: pulseRing 2s ease-out infinite;
+    }
+    @keyframes pulseRing {
+        0% { transform: scale(1); opacity: 0.8; }
+        100% { transform: scale(1.5); opacity: 0; }
+    }
+
+    .earth-label-card {
+        background: linear-gradient(135deg, rgba(0, 20, 40, 0.98), rgba(0, 10, 30, 0.98)) !important;
+        border: 2px solid #00ffff !important;
+        color: #fff !important;
+        padding: 8px 14px !important;
+        border-radius: 8px !important;
+        font-size: 14px !important;
+        display: flex !important;
+        align-items: center !important;
+        gap: 8px !important;
+        box-shadow: 0 0 25px rgba(0, 255, 255, 0.7) !important;
+        white-space: nowrap !important;
+        font-family: 'Consolas', monospace !important;
+        pointer-events: none !important;
+        transform: translate(-50%, -50%);
+    }
+    .earth-label-card .flag-display { display: flex !important; align-items: center !important; min-width: 24px !important; }
+    .earth-label-card .flag-emoji { font-size: 22px !important; font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif !important; }
+    .earth-label-card .flag-img { width: 24px !important; height: 18px !important; border-radius: 2px !important; }
+    .earth-label-card b { color: #00ffff !important; text-shadow: 0 0 10px rgba(0, 255, 255, 0.8) !important; }
+
+    #debug-panel {
+        position: absolute;
+        bottom: 100px;
+        left: 25px;
+        background: rgba(0, 0, 0, 0.95);
+        color: #0f0;
+        padding: 10px;
+        font-family: monospace;
+        font-size: 10px;
+        max-height: 200px;
+        overflow-y: auto;
+        border: 1px solid #0f0;
+        border-radius: 4px;
+        z-index: 10;
+        max-width: 300px;
+        display: none;
+    }
+    #debug-panel.show { display: block; }
+
+    @media (max-width: 768px) {
+        #earth-drawer-container { 
+            width: 100vw !important; 
+            min-width: 0 !important; 
+            height: 100vh !important;
+            top: 0 !important; 
+            bottom: 0; 
+            transform: translateX(100%); 
+            border-left: none; 
+            border-top: none;
+        }
+        #earth-drawer-container.active { 
+            transform: translateX(0); 
+        }
+        #earth-toggle-btn { 
+            width: 55px; 
+            height: 55px; 
+            bottom: 20px; 
+            right: 15px; 
+        }
+        .earth-icon { 
+            width: 30px; 
+            height: 30px; 
+        }
+        .earth-header { 
+            padding: 10px 15px; 
+        }
+        .earth-title { 
+            font-size: 14px; 
+            letter-spacing: 2px;
+        }
+        .earth-stats { 
+            font-size: 10px; 
+            padding: 8px 12px; 
+            top: 50px; 
+            left: 10px; 
+        }
+        #earth-close-btn {
+            padding: 8px 16px;
+            font-size: 12px;
+        }
+        .earth-label-card {
+            padding: 4px 8px !important;
+            font-size: 10px !important;
+            gap: 4px !important;
+            border-width: 1px !important;
+            box-shadow: 0 0 12px rgba(0, 255, 255, 0.5) !important;
+        }
+        .earth-label-card .flag-display {
+            min-width: 16px !important;
+        }
+        .earth-label-card .flag-emoji {
+            font-size: 14px !important;
+        }
+        .earth-label-card .flag-img {
+            width: 16px !important;
+            height: 12px !important;
+        }
+        .earth-label-card b {
+            font-size: 10px !important;
+        }
+    }
+</style>
+
+<div id="capsule-bar">
+    <svg class="capsule-icon" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+    </svg>
+    <span id="ip-display">Wait...</span>
+</div>
+
+<div id="back-top-btn" onclick="scrollToTop()">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z"/>
+    </svg>
+</div>
+
+<div id="earth-toggle-btn" title="Open Global Map">
+    <svg class="earth-icon" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+            <linearGradient id="earthGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" style="stop-color:#00ffff"/>
+                <stop offset="50%" style="stop-color:#0080ff"/>
+                <stop offset="100%" style="stop-color:#00ffff"/>
+            </linearGradient>
+            <filter id="glow"><feGaussianBlur stdDeviation="2" result="coloredBlur"/><feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        </defs>
+        <circle cx="50" cy="50" r="46" fill="none" stroke="url(#earthGrad)" stroke-width="2" filter="url(#glow)" opacity="0.8"/>
+        <circle cx="50" cy="50" r="40" fill="rgba(0,20,40,0.6)" stroke="url(#earthGrad)" stroke-width="1.5"/>
+        <g fill="rgba(0,255,255,0.15)" stroke="url(#earthGrad)" stroke-width="1.5" filter="url(#glow)">
+            <path d="M20,30 Q25,25 30,28 L35,25 Q40,22 42,28 L40,35 Q35,40 30,38 L25,35 Z"/>
+            <path d="M30,50 Q35,48 38,52 L36,62 Q32,68 28,65 L26,55 Z"/>
+            <path d="M50,40 Q55,38 60,42 L58,55 Q52,62 48,58 L46,48 Z"/>
+            <path d="M60,25 Q70,22 78,28 L80,38 Q75,45 68,42 L62,35 Z"/>
+            <path d="M72,55 Q78,52 82,56 L80,62 Q75,65 72,60 Z"/>
+        </g>
+        <ellipse cx="50" cy="50" rx="40" ry="15" fill="none" stroke="url(#earthGrad)" stroke-width="0.5" opacity="0.4"/>
+        <line x1="50" y1="10" x2="50" y2="90" stroke="url(#earthGrad)" stroke-width="0.5" opacity="0.4"/>
+        <circle cx="50" cy="50" r="3" fill="#00ffff" filter="url(#glow)">
+            <animate attributeName="r" values="3;4;3" dur="2s" repeatCount="indefinite"/>
+        </circle>
+        <circle cx="50" cy="50" r="35" fill="none" stroke="url(#earthGrad)" stroke-width="0.8" stroke-dasharray="4,8" opacity="0.5">
+            <animateTransform attributeName="transform" type="rotate" from="0 50 50" to="360 50 50" dur="20s" repeatCount="indefinite"/>
+        </circle>
+    </svg>
+    <div class="particle-container">
+        <div class="particle" style="--x:0.1;--y:0.5;"></div>
+        <div class="particle" style="--x:0.9;--y:0.5;"></div>
+        <div class="particle" style="--x:0.5;--y:0.1;"></div>
+        <div class="particle" style="--x:0.5;--y:0.9;"></div>
+        <div class="particle" style="--x:0.2;--y:0.2;"></div>
+        <div class="particle" style="--x:0.8;--y:0.8;"></div>
+    </div>
+    <div class="ripple-ring"></div>
+    <div class="pulse-ring"></div>
+</div>
+
+<div id="earth-drawer-container">
+    <div class="earth-header">
+        <div class="earth-title">服务器全球分布区域</div>
+        <div id="earth-close-btn">关闭</div>
+    </div>
+    <div class="earth-stats">
+        <div>检测到<span id="country-count">0</span>个地区</div>
+        <div>已加载<span id="polygon-count">0</span>个区域</div>
+        <div>状态: <span id="globe-status">Ready</span></div>
+        <div style="margin-top:8px;font-size:10px;opacity:0.7;cursor:pointer" id="toggle-debug">[调试]</div>
+    </div>
+    <div id="debug-panel"></div>
+    <div id="earth-render-area"></div>
+</div>
+
+<script>
+/* =========================================
+   胶囊条与返回顶部逻辑 (独立运行)
+   ========================================= */
+(function() {
+    // 1. IP获取与慢速显示逻辑
+    const bar = document.getElementById('capsule-bar');
+    const el = document.getElementById('ip-display');
+
+    // 添加错误处理，避免API请求失败时出错
+    fetch('https://ipwho.is/?lang=zh-CN')
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                // 填入数据
+                el.innerHTML = `
+                    <span class="ip-prefix">Your IP:</span> 
+                    ${data.ip} 
+                    <span class="capsule-divider"></span> 
+                    <span>${data.city}</span>
+                    <span class="isp-info">&nbsp;${data.connection.isp}</span>
+                `;
+                
+                // 关键修改 1：数据就绪后，先等待 1.5 秒
+                setTimeout(() => {
+                    // 关键修改 2：添加类名，触发 CSS 中定义的 1.5秒 慢速淡入
+                    if(bar) bar.classList.add('active');
+                    
+                    // 关键修改 3：显示 10 秒后自动消失
+                    setTimeout(() => {
+                        if(bar) bar.classList.remove('active');
+                    }, 10000); 
+                    
+                }, 1500);
+
+            } else {
+                el.innerText = "Network Info N/A";
+            }
+        })
+        .catch(() => { 
+            el.innerText = "Error fetching IP info.";
+            console.log("Fetch error"); 
+        });
+
+    // 2. 滚动监听 (返回顶部按钮)
+    const btn = document.getElementById('back-top-btn');
+    window.addEventListener('scroll', function(e) {
+        const scrollTop = window.scrollY || e.target.scrollTop || document.documentElement.scrollTop || 0;
+        if (scrollTop > 200) {
+            btn.classList.add('visible');
+        } else {
+            btn.classList.remove('visible');
+        }
+    }, true);
+    
+    // 3. 挂载全局函数
+    window.scrollToTop = function() {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        const scrollables = document.querySelectorAll('div, main');
+        scrollables.forEach(el => {
+            if (el.scrollTop > 0) try { el.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e){console.error(e);}
+        });
+    }
+})();
+
+/* =========================================
+   原有：地球核心逻辑
+   ========================================= */
+(function() {
+    'use strict';
+    
+    // --- 存储用户IP位置 (访问者) ---
+    let userLocation = null;
+
+    // --- 扩展后的坐标字典 ---
+    const COORD_MAP = {
+        'CN': [35.8617, 104.1954], 'HK': [22.3193, 114.1694], 'TW': [23.6978, 120.9605],
+        'JP': [36.2048, 138.2529], 'KR': [35.9078, 127.7669], 'SG': [1.3521, 103.8198],
+        'TH': [15.8700, 100.9925], 'VN': [14.0583, 108.2772], 'MY': [4.2105, 101.9758],
+        'ID': [-0.7893, 113.9213], 'PH': [12.8797, 121.7740], 'IN': [20.5937, 78.9629],
+        'PK': [30.3753, 69.3451], 'BD': [23.6850, 90.3563], 'MM': [21.9162, 95.9560],
+        'KH': [12.5657, 104.9910], 'LA': [19.8563, 102.4955], 'NP': [28.3949, 84.1240],
+        'LK': [7.8731, 80.7718], 'MN': [46.8625, 103.8467], 'KZ': [48.0196, 66.9237],
+        'UZ': [41.3775, 64.5853], 'AZ': [40.1431, 47.5769], 'GE': [42.3154, 43.3569],
+        'AM': [40.0691, 45.0382], 'KW': [29.3117, 47.4818], 'QA': [25.3548, 51.1839],
+        'BH': [26.0667, 50.5577], 'OM': [21.4735, 55.9754], 'JO': [30.5852, 36.2384],
+        'LB': [33.8547, 35.8623], 'IQ': [33.2232, 43.6793], 'IR': [32.4279, 53.6880],
+        'AF': [33.9391, 67.7100],
+        // 中亚/西亚/其他
+        'KG': [41.2044, 74.7661], 'TJ': [38.8610, 71.2761], 'TM': [38.9697, 59.5563],
+        'SY': [34.8021, 38.9968], 'KP': [40.3399, 127.5101], 'MV': [3.2028, 73.2207],
+        'BN': [4.5353, 114.7277], 'TL': [-8.8742, 125.7275],
+        
+        'GB': [55.3781, -3.4360], 'DE': [51.1657, 10.4515], 'FR': [46.2276, 2.2137],
+        'IT': [41.8719, 12.5674], 'ES': [40.4637, -3.7492], 'NL': [52.1326, 5.2913],
+        'BE': [50.5039, 4.4699], 'CH': [46.8182, 8.2275], 'AT': [47.5162, 14.5501],
+        'SE': [60.1282, 18.6435], 'NO': [60.4720, 8.4689], 'FI': [61.9241, 25.7482],
+        'DK': [56.2639, 9.5018], 'IE': [53.4129, -8.2439], 'PT': [39.3999, -8.2245],
+        'GR': [39.0742, 21.8243], 'PL': [51.9194, 19.1451], 'CZ': [49.8175, 15.4730],
+        'RO': [45.9432, 24.9668], 'HU': [47.1625, 19.5033], 'UA': [48.3794, 31.1656],
+        'RU': [61.5240, 105.3188], 'TR': [38.9637, 35.2433], 'SK': [48.6690, 19.6990],
+        'BG': [42.7339, 25.4858], 'HR': [45.1000, 15.2000], 'RS': [44.0165, 21.0059],
+        'SI': [46.1512, 14.9955], 'LT': [55.1694, 23.8813], 'LV': [56.8796, 24.6032],
+        'EE': [58.5953, 25.0136], 'BY': [53.7098, 27.9534], 'MD': [47.4116, 28.3699],
+        'IS': [64.9631, -19.0208], 'LU': [49.8153, 6.1296], 'MT': [35.9375, 14.3754],
+        'CY': [35.1264, 33.4299], 'AL': [41.1533, 20.1683], 'MK': [41.5124, 21.7465],
+        'BA': [43.9159, 17.6791], 'ME': [42.7087, 19.3744],
+        'GL': [71.7069, -42.6043], // 格陵兰
+
+        'US': [37.0902, -95.7129], 'CA': [56.1304, -106.3468], 'MX': [23.6345, -102.5528],
+        'GT': [15.7835, -90.2308], 'CU': [21.5218, -77.7812], 'HT': [18.9712, -72.2852],
+        'DO': [18.7357, -70.1627], 'JM': [18.1096, -77.2975], 'PR': [18.2208, -66.5901],
+        'PA': [8.5380, -80.7821], 'CR': [9.7489, -83.7534], 'NI': [12.8654, -85.2072],
+        'HN': [15.2000, -86.2419], 'SV': [13.7942, -88.8965], 'BZ': [17.1899, -88.4976],
+        'BR': [-14.2350, -51.9253], 'AR': [-38.4161, -63.6167], 'CL': [-35.6751, -71.5430],
+        'CO': [4.5709, -74.2973], 'PE': [-9.1900, -75.0152],
+        'VE': [6.4238, -66.5897], 'EC': [-1.8312, -78.1834], 'BO': [-16.2902, -63.5887],
+        'PY': [-23.4425, -58.4438], 'UY': [-32.5228, -55.7658], 'GY': [4.8604, -58.9302],
+        'SR': [3.9193, -56.0278],
+        'BS': [25.0343, -77.3963], 'TT': [10.6918, -61.2225], 'BB': [13.1939, -59.5432],
+
+        'AU': [-25.2744, 133.7751], 'NZ': [-40.9006, 174.8860], 'FJ': [-17.7134, 178.0650],
+        'PG': [-6.3150, 143.9555], 'NC': [-20.9043, 165.6180],
+        'SB': [-9.6457, 160.1562], 'VU': [-15.3767, 166.9592],
+
+        'ZA': [-30.5595, 22.9375], 'EG': [26.8206, 30.8025], 'NG': [9.0820, 8.6753],
+        'KE': [-0.0236, 37.9062], 'MA': [31.7917, -7.0926], 'DZ': [28.0339, 1.6596],
+        'TN': [33.8869, 9.5375], 'GH': [7.9465, -1.0232], 'ET':[9.1450, 40.4897],
+        'UG': [1.3733, 32.2903], 'CI': [7.5400, -5.5471],
+        'SN': [14.4974, -14.4524], 'CM': [7.3697, 12.3547], 'AO': [-11.2027, 17.8739],
+        'MZ': [-18.6657, 35.5296], 'MG': [-18.7669, 46.8691], 'ZW': [-19.0154, 29.1549],
+        'BW': [-22.3285, 24.6849], 'NA': [-22.9576, 18.4904], 'RW': [-1.9403, 29.8739],
+        'MU': [-20.3484, 57.5522], 'LY': [26.3351, 17.2283], 'SD': [12.8628, 30.2176],
+        // 非洲其他
+        'CD': [-4.0383, 21.7587], 'CG': [-0.2280, 15.8277], 'SO': [5.1521, 46.1996],
+        'TD': [15.4542, 18.7322], 'NE': [17.6078, 8.0817], 'ML': [17.5707, -3.9962],
+        'BF': [12.2383, -1.5616], 'GN': [9.9456, -9.6966], 'SL': [8.4606, -11.7799],
+        'LR': [6.4281, -9.4295], 'TG': [8.6195, 0.8248], 'BJ': [9.3077, 2.3158],
+        'GA': [-0.8037, 11.6094], 'SS': [6.8770, 31.3070], 'ZM': [-13.1339, 27.8493],
+
+        'AE': [23.4241, 53.8478], 'SA': [23.8859, 45.0792], 'IL': [31.0461, 34.8516],
+        'YE': [15.5527, 48.5164],
+        'MO': [22.1987, 113.5439], 
+        'AQ': [-82.8628, 135.0000] 
+    };
+
+    // --- ISO ID映射 (用于GeoJSON板块高亮) ---
+    const ISO_TO_ID = {
+        'CN': '156', 'JP': '392', 'KR': '410', 'IN': '356', 'ID': '360', 
+        'TH': '764', 'VN': '704', 'MY': '458', 'PH': '608', 'SG': '702',
+        'PK': '586', 'BD': '50', 'MM': '104', 'KH': '116', 'LA': '418',
+        'NP': '524', 'LK': '144', 'MN': '496', 'KZ': '398', 'UZ': '860',
+        'TW': '158', 'HK': '344', 'AF': '4', 'IQ': '368', 'IR': '364',
+        'KW': '414', 'QA': '634', 'BH': '48', 'OM': '512', 'JO': '400',
+        'LB': '422', 'AZ': '31', 'GE': '268', 'AM': '51',
+        'KG': '417', 'TJ': '762', 'TM': '795', 'SY': '760', 'KP': '408',
+        'BN': '096', 'TL': '626', 'MV': '462',
+        'GB': '826', 'FR': '250', 'DE': '276', 'IT': '380', 'ES': '724',
+        'NL': '528', 'BE': '56', 'CH': '756', 'AT': '40', 'SE': '752',
+        'NO': '578', 'FI': '246', 'DK': '208', 'IE': '372', 'PT': '620',
+        'GR': '300', 'PL': '616', 'CZ': '203', 'RO': '642', 'HU': '348',
+        'UA': '804', 'RU': '643', 'TR': '792', 'SK': '703', 'BG': '100',
+        'HR': '191', 'RS': '688', 'SI': '705', 'LT': '440', 'LV': '428',
+        'EE': '233', 'BY': '112', 'MD': '498', 'IS': '352', 'LU': '442',
+        'MT': '470', 'CY': '196', 'AL': '8', 'MK': '807', 'BA': '70', 'ME': '499',
+        'GL': '304',
+        'US': '840', 'CA': '124', 'MX': '484', 'GT': '320', 'CU': '192',
+        'HT': '332', 'DO': '214', 'JM': '388', 'PA': '591', 'CR': '188',
+        'NI': '558', 'HN': '340', 'SV': '222', 'BZ': '84',
+        'BR': '76', 'AR': '32', 'CL': '152', 'CO': '170', 
+        'PE': '604',
+        'VE': '862', 'EC': '218', 'BO': '68', 'PY': '600', 'UY': '858',
+        'GY': '328', 'SR': '740',
+        'BS': '044', 'TT': '780', 'BB': '052',
+        'AU': '36',
+        'NZ': '554', 'FJ': '242', 'PG': '598', 'SB': '090', 'VU': '548',
+        'ZA': '710', 'EG': '818', 'NG': '566', 'KE': '404', 'MA': '504',
+        'DZ': '12', 'TN': '788', 'GH': '288', 'ET': '231', 'TZ': '834',
+        'UG': '800', 'CI': '384', 'SN': '686', 'CM': '120', 'AO': '24',
+        'MZ': '508', 'MG': '450', 'ZW': '716', 'BW': '72', 'NA': '516',
+        'RW': '646', 'MU': '480', 'LY': '434', 'SD': '729',
+        'CD': '180', 'CG': '178', 'SO': '706', 'TD': '148', 'NE': '562', 'ML': '466',
+        'BF': '854', 'GN': '324', 'SL': '694', 'LR': '430', 'TG': '768', 'BJ': '204',
+        'GA': '266', 'SS': '728', 'ZM': '894',
+        'AE': '784', 'SA': '682', 'IL': '376', 'YE': '887',
+        'MO': '446', 
+        'AQ': '010'
+    };
+
+    // --- 旗帜Emoji ---
+    const FLAG_EMOJI = {
+        'CN': '🇨🇳', 'HK': '🇭🇰', 'TW': '🇹🇼', 'JP': '🇯🇵', 'KR': '🇰🇷', 'SG': '🇸🇬',
+        'TH': '🇹🇭', 'VN': '🇻🇳', 'MY': '🇲🇾', 'ID': '🇮🇩', 'PH': '🇵🇭', 'IN': '🇮🇳',
+        'PK': '🇵🇰', 'BD': '🇧🇩', 'MM': '🇲🇲', 'KH': '🇰🇭', 'LA': '🇱🇦', 'NP': '🇳🇵',
+        'LK': '🇱🇰', 'MN': '🇲🇳', 'KZ': '🇰🇿', 'UZ': '🇺🇿', 'AZ': '🇦🇿', 'GE': '🇬🇪',
+        'AM': '🇦🇲', 'KW': '🇰🇼', 'QA': '🇶🇦', 'BH': '🇧🇭', 'OM': '🇴🇲', 'JO': '🇯🇴',
+        'LB': '🇱🇧', 'IQ': '🇮🇶', 'IR': '🇮🇷', 'AF': '🇦🇫',
+        'KG': '🇰🇬', 'TJ': '🇹🇯', 'TM': '🇹🇲', 'SY': '🇸🇾', 'KP': '🇰🇵', 'BN': '🇧🇳',
+        'TL': '🇹🇱', 'MV': '🇲🇻',
+        'GB': '🇬🇧', 'DE': '🇩🇪', 'FR': '🇫🇷', 'IT': '🇮🇹', 'ES': '🇪🇸', 'NL': '🇳🇱',
+        'BE': '🇧🇪', 'CH': '🇨🇭', 'AT': '🇦🇹', 'SE': '🇸🇪', 'NO': '🇳🇴', 'FI': '🇫🇮',
+        'DK': '🇩🇰', 'IE': '🇮🇪', 'PT': '🇵🇹', 'GR': '🇬🇷', 'PL': '🇵🇱', 'CZ': '🇨🇿',
+        'RO': '🇷🇴', 'HU': '🇭🇺', 'UA': '🇺🇦', 'RU': '🇷🇺', 'TR': '🇹🇷', 'SK': '🇸🇰',
+        'BG': '🇧🇬', 'HR': '🇭🇷', 'RS': '🇷🇸', 'SI': '🇸🇮', 'LT': '🇱🇹', 'LV': '🇱🇻',
+        'EE': '🇪🇪', 'BY': '🇧🇾', 'MD': '🇲🇩', 'IS': '🇮🇸', 'LU': '🇱🇺', 'MT': '🇲🇹',
+        'CY': '🇨🇾', 'AL': '🇦🇱', 'MK': '🇲🇰', 'BA': '🇧🇦', 'ME': '🇲🇪',
+        'GL': '🇬🇱',
+        'US': '🇺🇸', 'CA': '🇨🇦', 'MX': '🇲🇽', 'GT': '🇬🇹', 'CU': '🇨🇺', 'HT': '🇭🇹',
+        'DO': '🇩🇴', 'JM': '🇯🇲', 'PR': '🇵🇷', 'PA': '🇵🇦', 'CR': '🇨🇷', 'NI': '🇳🇮',
+        'HN': '🇭🇳', 'SV': '🇸🇻', 'BZ': '🇧🇿',
+        'BR': '🇧🇷', 'AR': '🇦🇷', 'CL': '🇨🇱', 'CO': '🇨🇴', 
+        'PE': '🇵🇪',
+        'VE': '🇻🇪', 'EC': '🇪🇨', 'BO': '🇧🇴', 'PY': '🇵🇾', 'UY': '🇺🇾', 'GY': '🇬🇾', 'SR': '🇸🇷',
+        'BS': '🇧🇸', 'TT': '🇹🇹', 'BB': '🇧🇧',
+        'AU': '🇦🇺', 'NZ': '🇳🇿', 'FJ': '🇫🇯', 'PG': '🇵🇬', 'SB': '🇸🇧', 'VU': '🇻🇺',
+        'ZA': '🇿🇦', 'EG': '🇪🇬', 'NG': '🇳🇬', 'KE': '🇰🇪', 'MA': '🇲🇦', 'DZ': '🇩🇿',
+        'TN': '🇹🇳', 'GH': '🇬🇭', 'ET': '🇪🇹', 'TZ': '🇹🇿', 'UG': '🇺🇬', 'CI': '🇨🇮',
+        'SN': '🇸🇳', 'CM': '🇨🇲', 'AO': '🇦🇴', 'MZ': '🇲🇿', 'MG': '🇲🇬', 'ZW': '🇿🇼',
+        'BW': '🇧🇼', 'NA': '🇳🇦', 'RW': '🇷🇼', 'MU': '🇲🇺', 'LY': '🇱🇾', 'SD': '🇸🇩',
+        'CD': '🇨🇩', 'CG': '🇨🇬', 'SO': '🇸🇴', 'TD': '🇹🇩', 'NE': '🇳🇪', 'ML': '🇲🇱',
+        'BF': '🇧🇫', 'GN': '🇬🇳', 'SL': '🇸🇱', 'LR': '🇱🇷', 'TG': '🇹🇬', 'BJ': '🇧🇯',
+        'GA': '🇬🇦', 'SS': '🇸🇸', 'ZM': '🇿🇲',
+        'AE': '🇦🇪', 'SA': '🇸🇦', 'IL': '🇮🇱', 'YE': '🇾🇪',
+        'MO': '🇲🇴', 
+        'AQ': '🇦🇶'
+    };
+
+    const container = document.getElementById('earth-drawer-container');
+    const renderArea = document.getElementById('earth-render-area');
+    const toggleBtn = document.getElementById('earth-toggle-btn');
+    const closeBtn = document.getElementById('earth-close-btn');
+    const countEl = document.getElementById('country-count');
+    const polygonCountEl = document.getElementById('polygon-count');
+    const statusEl = document.getElementById('globe-status');
+    const debugPanel = document.getElementById('debug-panel');
+    const toggleDebug = document.getElementById('toggle-debug');
+
+    let globeInstance = null;
+    let isActive = false;
+    let lastFlags = [];
+    let countriesGeoJSON = null;
+    let emojiSupported = null;
+    let debugLogs = [];
+
+    function checkEmojiSupport() {
+        if (emojiSupported !== null) return emojiSupported;
+        try {
+            const canvas = document.createElement('canvas');
+            canvas.width = 32; canvas.height = 32;
+            const ctx = canvas.getContext('2d');
+            ctx.font = '28px serif';
+            ctx.fillText('🇨🇳', 0, 28);
+            const data = ctx.getImageData(0, 0, 32, 32).data;
+            let colors = new Set();
+            for (let i = 0; i < data.length; i += 4) {
+                if (data[i + 3] > 50) colors.add(`${data[i]},${data[i+1]},${data[i+2]}`);
+            }
+            emojiSupported = colors.size > 3;
+        } catch (e) { emojiSupported = false; }
+        addLog(`表情符号: ${emojiSupported ? '支持' : '不支持'}`);
+        return emojiSupported;
+    }
+
+    function getFlagHTML(code) {
+        if (checkEmojiSupport() && FLAG_EMOJI[code]) {
+            return `<span class="flag-emoji">${FLAG_EMOJI[code]}</span>`;
+        }
+        return `<img class="flag-img" src="https://flagcdn.com/w40/${code.toLowerCase()}.png" alt="${code}" onerror="this.outerHTML='🏁'"/>`;
+    }
+
+    function addLog(msg) {
+        debugLogs.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
+        if (debugLogs.length > 50) debugLogs.shift();
+        debugPanel.innerHTML = debugLogs.slice(-20).map(l => `<div>${l}</div>`).join('');
+        debugPanel.scrollTop = debugPanel.scrollHeight;
+    }
+
+    toggleDebug.onclick = () => debugPanel.classList.toggle('show');
+
+    function createRipple() {
+        const ripple = toggleBtn.querySelector('.ripple-ring');
+        ripple.classList.remove('animate');
+        void ripple.offsetWidth;
+        ripple.classList.add('animate');
+    }
+
+    async function loadGeoJSON() {
+        if (countriesGeoJSON) return countriesGeoJSON;
+        addLog('地理结构加载中...');
+        statusEl.textContent = 'Loading';
+        try {
+            const res = await fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json');
+            const topo = await res.json();
+            countriesGeoJSON = topojson.feature(topo, topo.objects.countries).features;
+            addLog(`已加载 ${countriesGeoJSON.length} 个国家`);
+            return countriesGeoJSON;
+        } catch (e) {
+            addLog(`Load failed: ${e.message}`);
+            return [];
+        }
+    }
+
+    function filterPolygons(codes) {
+        if (!countriesGeoJSON || codes.length === 0) return [];
+        
+        addLog(`已加载 ${codes.length} 个区域...`);
+        const result = [];
+        const notFound = [];
+        
+        codes.forEach(code => {
+            const numericId = ISO_TO_ID[code];
+            
+            const feat = countriesGeoJSON.find(f => {
+                const fid = String(f.id);
+                const props = f.properties || {};
+                
+                if (numericId && fid === numericId) return true;
+                if (numericId && fid === numericId.padStart(3, '0')) return true;
+                if (numericId && fid.replace(/^0+/, '') === numericId) return true;
+                if (props.ISO_A2 === code || props.iso_a2 === code) return true;
+                if (props.ISO_A3 === code || props.iso_a3 === code) return true;
+                
+                return false;
+            });
+            
+            if (feat) {
+                result.push({ code, geometry: feat.geometry, id: feat.id });
+                addLog(`${code} 已加载 (id: ${feat.id})`);
+            } else {
+                notFound.push(code);
+            }
+        });
+        
+        if (notFound.length > 0) {
+            addLog(`Not matched: ${notFound.join(', ')}`);
+        }
+        
+        polygonCountEl.textContent = result.length;
+        addLog(`加载数量: ${result.length}/${codes.length}`);
+        return result;
+    }
+
+    function scanFlags() {
+        const flags = new Set();
+        document.querySelectorAll('[class*="flag-icon-"], [class*="fi-"]').forEach(el => {
+            el.classList.forEach(cls => {
+                const m = cls.match(/(?:flag-icon-|fi-)([a-z]{2})/i);
+                if (m && COORD_MAP[m[1].toUpperCase()]) flags.add(m[1].toUpperCase());
+            });
+        });
+        document.querySelectorAll('[data-country-code], [data-country]').forEach(el => {
+            const code = (el.dataset.countryCode || el.dataset.country || '').toUpperCase();
+            if (COORD_MAP[code]) flags.add(code);
+        });
+        document.querySelectorAll('img[src*="flag"]').forEach(img => {
+            Object.keys(COORD_MAP).forEach(code => {
+                if (img.src.toLowerCase().includes(`/${code.toLowerCase()}.`)) flags.add(code);
+            });
+        });
+        addLog(`已扫描 ${flags.size} 面旗帜`);
+        return Array.from(flags);
+    }
+
+    // --- 数据生成逻辑：仅根据扫描结果显示 ---
+    function generateData() {
+        // 1. 只获取页面实际存在的旗帜代码
+        let codes = scanFlags();
+        
+        const points = [], arcs = [];
+        if (codes.length === 0) return { points, arcs, codes };
+
+        // 2. 确定飞线起点：优先使用用户位置，否则回退到列表第一个或中国
+        let startLat = userLocation ? userLocation.lat : (COORD_MAP[codes[0]] ? COORD_MAP[codes[0]][0] : 35);
+        let startLng = userLocation ? userLocation.lng : (COORD_MAP[codes[0]] ? COORD_MAP[codes[0]][1] : 110);
+        
+        if (!userLocation && codes.includes('CN')) {
+             startLat = COORD_MAP['CN'][0];
+             startLng = COORD_MAP['CN'][1];
+        }
+
+        // 3. 生成数据点和飞线
+        codes.forEach(code => {
+            const coord = COORD_MAP[code];
+            if (coord) {
+                points.push({ code, lat: coord[0], lng: coord[1] });
+                
+                // 只有当目标不是起点本身时，才生成飞线
+                const isOrigin = Math.abs(coord[0] - startLat) < 1 && Math.abs(coord[1] - startLng) < 1;
+                if (!isOrigin) {
+                    arcs.push({
+                        startLat: startLat, startLng: startLng,
+                        endLat: coord[0], endLng: coord[1]
+                    });
+                }
+            }
+        });
+        return { points, arcs, codes };
+    }
+
+    async function initGlobe() {
+        if (globeInstance) { updateGlobe(); return; }
+        
+        statusEl.textContent = 'Initializing';
+        addLog('地球已激活');
+        checkEmojiSupport();
+        
+        await loadGeoJSON();
+        
+        const { points, arcs, codes } = generateData();
+        
+        if (codes.length === 0) {
+            statusEl.textContent = 'No Data';
+            addLog('No countries found');
+            return;
+        }
+
+        countEl.textContent = codes.length;
+        lastFlags = codes;
+        const polygons = filterPolygons(codes);
+
+        try {
+            const globe = Globe();
+            globe(renderArea);
+            globe.width(renderArea.clientWidth);
+            globe.height(renderArea.clientHeight);
+
+            globe.backgroundImageUrl('https://i.onji.cn/cgz/1/2026/02/698436de0d050.png');
+            globe.globeImageUrl('https://i.onji.cn/cgz/1/2026/02/6984369591a5d.jpg');
+            globe.bumpImageUrl('https://i.onji.cn/cgz/1/2026/02/698436b7b2065.png');
+            globe.atmosphereColor('rgba(26, 84, 144, 0.8)');
+            globe.atmosphereAltitude(0.25);
+
+            if (polygons.length > 0) {
+                globe.polygonsData(polygons);
+                globe.polygonAltitude(0.01);
+                globe.polygonCapColor(() => 'rgba(0, 200, 255, 0.4)');
+                globe.polygonSideColor(() => 'rgba(0, 200, 255, 0.2)');
+                globe.polygonStrokeColor(() => '#00ffff');
+
+                let hoveredPolygon = null;
+                let hoverParticles = [];
+                let particleInterval = null;
+                
+                globe.onPolygonHover((polygon, prevPolygon) => {
+                    hoveredPolygon = polygon;
+                    
+                    if (polygon && polygon.code) {
+                        globe.controls().autoRotate = false;
+                        addLog(`当前悬停: ${polygon.code}`);
+                    } else {
+                        globe.controls().autoRotate = true;
+                        addLog(`已恢复自转`);
+                    }
+
+                    if (particleInterval) {
+                        clearInterval(particleInterval);
+                        particleInterval = null;
+                    }
+                    
+                    globe.polygonAltitude(d => d === polygon ? 0.06 : 0.01);
+                    globe.polygonCapColor(d => d === polygon 
+                        ? 'rgba(0, 255, 255, 0.8)' 
+                        : 'rgba(0, 200, 255, 0.4)');
+                    globe.polygonSideColor(d => d === polygon 
+                        ? 'rgba(0, 255, 255, 0.6)' 
+                        : 'rgba(0, 200, 255, 0.15)');
+                    
+                    if (polygon && polygon.code) {
+                        addLog(`暂停自转`);
+                        
+                        const coord = COORD_MAP[polygon.code];
+                        if (coord) {
+                            particleInterval = setInterval(() => {
+                                for (let i = 0; i < 2; i++) {
+                                    hoverParticles.push({
+                                        lat: coord[0] + (Math.random() - 0.5) * 8,
+                                        lng: coord[1] + (Math.random() - 0.5) * 8,
+                                        alt: 0.02,
+                                        targetAlt: 0.15 + Math.random() * 0.1,
+                                        color: `hsl(${180 + Math.random() * 30}, 100%, ${60 + Math.random() * 20}%)`
+                                    });
+                                }
+                                
+                                if (hoverParticles.length > 50) {
+                                    hoverParticles = hoverParticles.slice(-40);
+                                }
+                                
+                                hoverParticles = hoverParticles.filter(p => {
+                                    p.alt += 0.003;
+                                    return p.alt < p.targetAlt;
+                                });
+                                
+                                globe.customLayerData(hoverParticles);
+                            }, 80);
+                        }
+                    } else {
+                        hoverParticles = [];
+                        globe.customLayerData([]);
+                    }
+                });
+                
+                globe.customThreeObject(d => {
+                    const geometry = new THREE.SphereGeometry(0.15, 8, 8);
+                    const material = new THREE.MeshBasicMaterial({
+                        color: d.color,
+                        transparent: true,
+                        opacity: 0.8
+                    });
+                    return new THREE.Mesh(geometry, material);
+                });
+                
+                globe.customThreeObjectUpdate((obj, d) => {
+                    Object.assign(obj.position, globe.getCoords(d.lat, d.lng, d.alt));
+                    obj.material.opacity = Math.max(0, 1 - (d.alt / d.targetAlt));
+                });
+                
+                globe.onPolygonClick((polygon, event, coords) => {
+                    if (!polygon || !polygon.code) return;
+                    
+                    addLog(`Click: ${polygon.code}`);
+                    
+                    const coord = COORD_MAP[polygon.code];
+                    if (coord) {
+                        const currentRings = globe.ringsData() || [];
+                        
+                        const clickRipples = [];
+                        for (let i = 0; i < 3; i++) {
+                            clickRipples.push({
+                                lat: coord[0],
+                                lng: coord[1],
+                                maxRadius: 5 + i * 2,
+                                propagationSpeed: 3 + i,
+                                repeatPeriod: 0,
+                                altitude: 0.02
+                            });
+                        }
+                        
+                        globe.ringsData([...currentRings, ...clickRipples]);
+                        
+                        setTimeout(() => {
+                            const rings = globe.ringsData() || [];
+                            globe.ringsData(rings.filter(r => !clickRipples.includes(r)));
+                        }, 2000);
+                    }
+                });
+
+                globe.polygonLabel(d => {
+                    return `<div class="earth-label-card">
+                        <div class="flag-display">${getFlagHTML(d.code)}</div>
+                        <b>${d.code}</b>
+                    </div>`;
+                });
+            }
+
+            globe.ringsData(points);
+            globe.ringColor(() => '#00ffff');
+            globe.ringMaxRadius(5);
+            globe.ringPropagationSpeed(3);
+            globe.ringRepeatPeriod(800);
+
+            globe.pointsData(points);
+            globe.pointColor(() => '#00ffff');
+            globe.pointAltitude(0.02);
+            globe.pointRadius(0.5);
+
+            globe.htmlElementsData(points);
+            globe.htmlElement(d => {
+                const el = document.createElement('div');
+                el.innerHTML = `<div class="earth-label-card">
+                    <div class="flag-display">${getFlagHTML(d.code)}</div>
+                    <b>${d.code}</b>
+                </div>`;
+                el.style.pointerEvents = 'none';
+                return el;
+            });
+            globe.htmlLat(d => d.lat);
+            globe.htmlLng(d => d.lng);
+            globe.htmlAltitude(0.06);
+
+            globe.arcsData(arcs);
+            globe.arcColor(() => ['rgba(0, 255, 255, 0.5)', 'rgba(255, 0, 255, 0.5)']);
+            globe.arcDashLength(0.7);
+            globe.arcDashGap(0.2);
+            globe.arcDashAnimateTime(2000);
+            globe.arcStroke(1.2);
+            globe.arcAltitude(0.3);
+
+            globe.pointOfView({
+                lat: codes.includes('CN') ? 35 : 20,
+                lng: codes.includes('CN') ? 110 : 0,
+                altitude: 2.5
+            });
+
+            globe.controls().autoRotate = true;
+            globe.controls().autoRotateSpeed = 0.8;
+            globe.controls().enableZoom = true;
+
+            globeInstance = globe;
+            statusEl.textContent = '已完成';
+            addLog(`地球加载完毕! ${codes.length} 个国家, ${polygons.length} 个区域`);
+
+        } catch (error) {
+            statusEl.textContent = 'Error';
+            addLog(`Error: ${error.message}`);
+            console.error(error);
+        }
+    }
+
+    function updateGlobe() {
+        if (!globeInstance) return;
+        
+        const { points, arcs, codes } = generateData();
+        if (JSON.stringify(codes.sort()) === JSON.stringify(lastFlags.sort())) return;
+
+        addLog('Updating globe...');
+        lastFlags = codes;
+        countEl.textContent = codes.length;
+
+        const polygons = filterPolygons(codes);
+        
+        if (polygons.length > 0) {
+            globeInstance.polygonsData(polygons);
+        }
+        globeInstance.ringsData(points);
+        globeInstance.pointsData(points);
+        globeInstance.htmlElementsData(points);
+        globeInstance.arcsData(arcs);
+        
+        addLog(`Updated: ${codes.length} countries`);
+    }
+
+    function toggle() {
+        isActive = !isActive;
+        createRipple();
+
+        if (isActive) {
+            container.classList.add('active');
+            toggleBtn.classList.add('hidden');
+            debugLogs = [];
+            addLog('地球已加载');
+            setTimeout(initGlobe, 400);
+        } else {
+            container.classList.remove('active');
+            toggleBtn.classList.remove('hidden');
+            if (globeInstance && globeInstance.controls) {
+                globeInstance.controls().autoRotate = false;
+            }
+            addLog('Globe deactivated');
+        }
+    }
+
+    toggleBtn.addEventListener('click', toggle);
+    closeBtn.addEventListener('click', toggle);
+
+    window.addEventListener('resize', () => {
+        if (isActive && globeInstance) {
+            globeInstance.width(renderArea.clientWidth);
+            globeInstance.height(renderArea.clientHeight);
+        }
+    });
+
+    setInterval(() => {
+        if (isActive && globeInstance) updateGlobe();
+    }, 30000);
+
+    fetch('https://ipapi.co/json/')
+        .then(res => res.json())
+        .then(data => {
+            if (data.latitude && data.longitude) {
+                userLocation = { lat: data.latitude, lng: data.longitude };
+                addLog(`定位成功: ${data.city}`);
+                if (globeInstance) updateGlobe();
+            }
+        })
+        .catch(() => addLog('定位不可用，使用默认位置'));
+
+    addLog('Earth module loaded');
+})();
+</script>
+</body>
+</html>
