@@ -4,3 +4,7 @@ komari整合了增加点亮全球板块与增加访问者底部胶囊弹窗
 点亮全球修改为射线从访问者IP发射，补全了部分国家地区。
 注意：移动端点开为全屏
 代码参考了NS站大佬Newbie-rd转发的代码（如有确切原作者欢迎指正）
+样例
+![image]([https://](https://github.com/admintors/komari--earth/blob/main/IMG_20260206_100417.jpg))
+![image]([https://](https://github.com/admintors/komari--earth/blob/main/IMG_20260206_100417.jpg))
+![image]([https://](https://github.com/admintors/komari--earth/blob/main/IMG_20260206_100712.jpg))
